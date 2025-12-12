@@ -1,0 +1,263 @@
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------
+  # POSTGRESQL DATABASE
+  # ---------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bloomflow}
+      POSTGRES_USER: ${POSTGRES_USER:-bloomflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      bloomflow_network:
+        aliases:
+          - postgres
+          - bloomflow_postgres
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      placement:
+        constraints:
+          - node.role == manager
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bloomflow}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------
+  # DB INIT – CREATES bloomflow_inventory & bloomflow_orders
+  # ---------------------------------------------------------
+  db-init:
+    image: postgres:15-alpine
+    command: >
+      sh -c "
+      echo 'Waiting for Postgres...';
+      until pg_isready -h postgres -U $${POSTGRES_USER:-bloomflow}; do sleep 2; done;
+
+      echo 'Postgres is up!';
+      export PGPASSWORD=$${POSTGRES_PASSWORD};
+
+      DB_INVENTORY=$${POSTGRES_DB:-bloomflow}_inventory;
+      DB_ORDERS=$${POSTGRES_DB:-bloomflow}_orders;
+
+      if ! psql -h postgres -U $${POSTGRES_USER:-bloomflow} -d postgres -tc \"SELECT 1 FROM pg_database WHERE datname='$$DB_INVENTORY'\" | grep -q 1; then
+        echo 'Creating $$DB_INVENTORY...';
+        psql -h postgres -U $${POSTGRES_USER:-bloomflow} -d postgres -c \"CREATE DATABASE $$DB_INVENTORY\";
+      fi;
+
+      if ! psql -h postgres -U $${POSTGRES_USER:-bloomflow} -d postgres -tc \"SELECT 1 FROM pg_database WHERE datname='$$DB_ORDERS'\" | grep -q 1; then
+        echo 'Creating $$DB_ORDERS...';
+        psql -h postgres -U $${POSTGRES_USER:-bloomflow} -d postgres -c \"CREATE DATABASE $$DB_ORDERS\";
+      fi;
+
+      echo 'DB init finished!';
+      "
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bloomflow}
+      POSTGRES_DB: ${POSTGRES_DB:-bloomflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    networks:
+      - bloomflow_network
+    depends_on:
+      - postgres
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: none
+      placement:
+        constraints:
+          - node.role == manager
+
+  # ---------------------------------------------------------
+  # KEYCLOAK
+  # ---------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0.0
+    command: start-dev
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-bloomflow}
+      KC_DB_USERNAME: ${POSTGRES_USER:-bloomflow}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+    ports:
+      - target: 8080
+        published: 8080
+        protocol: tcp
+        mode: host
+    networks:
+      - bloomflow_network
+    depends_on:
+      - postgres
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+  # ---------------------------------------------------------
+  # RABBITMQ
+  # ---------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-bloomflow}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - bloomflow_network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+
+  # ---------------------------------------------------------
+  # AUTH SERVICE
+  # ---------------------------------------------------------
+  auth-service:
+    image: bloomflow/auth-service:latest
+    ports:
+      - target: 5000
+        published: 5001
+        protocol: tcp
+        mode: host
+    environment:
+      KEYCLOAK_SERVER_URL: http://keycloak:8080
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-bloomflow}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-bloomflow-api}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      FLASK_ENV: production
+    networks:
+      - bloomflow_network
+    depends_on:
+      - keycloak
+
+  # ---------------------------------------------------------
+  # USER SERVICE
+  # ---------------------------------------------------------
+  user-service:
+    image: bloomflow/user-service:latest
+    ports:
+      - target: 5000
+        published: 5002
+        protocol: tcp
+        mode: host
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bloomflow}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-bloomflow}
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-bloomflow}
+      POSTGRES_DB: ${POSTGRES_DB:-bloomflow}
+      AUTH_SERVICE_URL: http://auth-service:5000
+      FLASK_ENV: production
+    networks:
+      - bloomflow_network
+    depends_on:
+      - postgres
+      - auth-service
+
+  # ---------------------------------------------------------
+  # INVENTORY SERVICE – NO netcat, safe wait
+  # ---------------------------------------------------------
+  inventory-service:
+    image: bloomflow/inventory-service:latest
+    ports:
+      - target: 5000
+        published: 5003
+        protocol: tcp
+        mode: host
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bloomflow}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-bloomflow}_inventory
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-bloomflow}
+      POSTGRES_DB: ${POSTGRES_DB:-bloomflow}
+      AUTH_SERVICE_URL: http://auth-service:5000
+      FLASK_ENV: production
+    networks:
+      - bloomflow_network
+    depends_on:
+      - postgres
+      - db-init
+      - auth-service
+
+  # ---------------------------------------------------------
+  # ORDER SERVICE
+  # ---------------------------------------------------------
+  order-service:
+    image: bloomflow/order-service:latest
+    ports:
+      - target: 5000
+        published: 5004
+        protocol: tcp
+        mode: host
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bloomflow}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-bloomflow}_orders
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-bloomflow}
+      POSTGRES_DB: ${POSTGRES_DB:-bloomflow}
+      AUTH_SERVICE_URL: http://auth-service:5000
+      USER_SERVICE_URL: http://user-service:5000
+      INVENTORY_SERVICE_URL: http://inventory-service:5000
+      FLASK_ENV: production
+    networks:
+      - bloomflow_network
+    depends_on:
+      - postgres
+      - db-init
+      - auth-service
+      - user-service
+      - inventory-service
+
+  # ---------------------------------------------------------
+  # BOUQUET SERVICE
+  # ---------------------------------------------------------
+  bouquet-service:
+    image: bloomflow/bouquet-service:latest
+    ports:
+      - target: 5000
+        published: 5005
+        protocol: tcp
+        mode: host
+    environment:
+      AUTH_SERVICE_URL: http://auth-service:5000
+      INVENTORY_SERVICE_URL: http://inventory-service:5000
+      FLASK_ENV: production
+    networks:
+      - bloomflow_network
+    depends_on:
+      - auth-service
+      - inventory-service
+
+# ---------------------------------------------------------
+# NETWORK + VOLUME
+# ---------------------------------------------------------
+networks:
+  bloomflow_network:
+    driver: overlay
+    attachable: true
+
+volumes:
+  postgres_data:
+    driver: local
