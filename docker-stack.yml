@@ -1,9 +1,6 @@
 version: '3.8'
 
 services:
-  # ---------------------------------------------------------
-  # POSTGRESQL DATABASE
-  # ---------------------------------------------------------
   postgres:
     image: postgres:15-alpine
     environment:
@@ -32,9 +29,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # ---------------------------------------------------------
-  # DB INIT – CREATES bloomflow_inventory & bloomflow_orders
-  # ---------------------------------------------------------
+ 
   db-init:
     image: postgres:15-alpine
     command: >
@@ -76,9 +71,7 @@ services:
         constraints:
           - node.role == manager
 
-  # ---------------------------------------------------------
-  # KEYCLOAK
-  # ---------------------------------------------------------
+
   keycloak:
     image: quay.io/keycloak/keycloak:25.0.0
     command: start-dev
@@ -114,9 +107,7 @@ services:
           cpus: '1'
           memory: 1G
 
-  # ---------------------------------------------------------
-  # RABBITMQ
-  # ---------------------------------------------------------
+  
   rabbitmq:
     image: rabbitmq:3-management-alpine
     environment:
@@ -134,9 +125,7 @@ services:
         delay: 5s
         max_attempts: 3
 
-  # ---------------------------------------------------------
-  # AUTH SERVICE
-  # ---------------------------------------------------------
+ 
   auth-service:
     image: bloomflow/auth-service:latest
     ports:
@@ -155,9 +144,7 @@ services:
     depends_on:
       - keycloak
 
-  # ---------------------------------------------------------
-  # USER SERVICE
-  # ---------------------------------------------------------
+ 
   user-service:
     image: bloomflow/user-service:latest
     ports:
@@ -178,9 +165,7 @@ services:
       - postgres
       - auth-service
 
-  # ---------------------------------------------------------
-  # INVENTORY SERVICE – NO netcat, safe wait
-  # ---------------------------------------------------------
+
   inventory-service:
     image: bloomflow/inventory-service:latest
     ports:
@@ -202,9 +187,7 @@ services:
       - db-init
       - auth-service
 
-  # ---------------------------------------------------------
-  # ORDER SERVICE
-  # ---------------------------------------------------------
+  
   order-service:
     image: bloomflow/order-service:latest
     ports:
@@ -230,9 +213,7 @@ services:
       - user-service
       - inventory-service
 
-  # ---------------------------------------------------------
-  # BOUQUET SERVICE
-  # ---------------------------------------------------------
+
   bouquet-service:
     image: bloomflow/bouquet-service:latest
     ports:
@@ -250,9 +231,7 @@ services:
       - auth-service
       - inventory-service
 
-# ---------------------------------------------------------
-# NETWORK + VOLUME
-# ---------------------------------------------------------
+
 networks:
   bloomflow_network:
     driver: overlay
