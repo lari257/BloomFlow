@@ -1,4 +1,5 @@
 from flask import Flask, jsonify
+from flask_cors import CORS
 from sqlalchemy import text
 from config import Config
 from database import init_db
@@ -6,6 +7,9 @@ from routes import bp
 
 app = Flask(__name__)
 app.config.from_object(Config)
+
+# Enable CORS for all routes
+CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
 
 # Initialize database
 db = init_db(app)

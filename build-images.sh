@@ -21,6 +21,9 @@ docker build -t bloomflow/order-service:latest ./order-service
 echo "Building bouquet-service..."
 docker build -t bloomflow/bouquet-service:latest ./bouquet-service
 
+echo "Building bouquet-worker..."
+docker build -t bloomflow/bouquet-worker:latest ./bouquet-worker
+
 echo "=== All images built successfully ==="
 docker images | grep bloomflow
 

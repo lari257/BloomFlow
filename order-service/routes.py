@@ -4,6 +4,7 @@ from database import db
 from models import Order, OrderItem
 import requests
 from config import Config
+from rabbitmq_publisher import get_publisher
 
 config = Config()
 
@@ -110,9 +111,13 @@ def check_inventory_availability(items, token):
         
         if response.status_code == 200:
             data = response.json()
+            # Debug: print availability details
+            print(f"Availability check response: {data}")
             return data.get('all_available', False)
-        
-        return False
+        else:
+            # Debug: print error response
+            print(f"Availability check failed with status {response.status_code}: {response.text}")
+            return False
     except Exception as e:
         print(f"Error checking inventory: {e}")
         return False
@@ -140,6 +145,26 @@ def get_flower_prices(items, token):
         print(f"Error getting flower prices: {e}")
     
     return prices
+
+def reduce_inventory_quantities(items, token):
+    """Reduce inventory quantities after order creation"""
+    try:
+        response = requests.post(
+            f"{config.INVENTORY_SERVICE_URL}/inventory/reduce",
+            json={'items': items},
+            headers={'Authorization': token},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            return True, None
+        else:
+            error_data = response.json() if response.content else {}
+            error_msg = error_data.get('error', 'Failed to reduce inventory')
+            return False, error_msg
+    except Exception as e:
+        print(f"Error reducing inventory: {e}")
+        return False, str(e)
 
 @bp.route('/orders', methods=['POST'])
 @require_auth
@@ -189,7 +214,7 @@ def create_order():
             'subtotal': subtotal
         })
     
-    # Create order
+    # Create order (status will be updated to 'processing' when task is published)
     order = Order(
         user_id=user_id,
         status='pending',
@@ -208,7 +233,48 @@ def create_order():
         )
         db.session.add(order_item)
     
+    # Reduce inventory quantities before committing the order
+    # This ensures we don't create orders if inventory can't be reduced
+    success, error_msg = reduce_inventory_quantities(items, token)
+    if not success:
+        # Rollback the order if inventory reduction fails
+        db.session.rollback()
+        return jsonify({'error': f'Order creation failed: {error_msg}'}), 500
+    
+    # Commit the order after successful inventory reduction
     db.session.commit()
+    
+    # Publish assembly task to RabbitMQ queue
+    try:
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        publisher = get_publisher()
+        # Prepare items for the worker (only flower_type_id and quantity)
+        assembly_items = [
+            {
+                'flower_type_id': item['flower_type_id'],
+                'quantity': item['quantity']
+            }
+            for item in items
+        ]
+        
+        logger.info(f"Attempting to publish assembly task for order {order.id} to RabbitMQ")
+        success = publisher.publish_assembly_task(order.id, assembly_items)
+        
+        if success:
+            # Update order status to 'processing' when task is successfully published
+            logger.info(f"Successfully published task for order {order.id}, updating status to 'processing'")
+            order.status = 'processing'
+            db.session.commit()
+        else:
+            logger.warning(f"Failed to publish assembly task for order {order.id} to RabbitMQ")
+    except Exception as e:
+        # Log error but don't fail the order creation
+        # The order is already created, worker can pick it up later
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Exception while publishing assembly task to RabbitMQ: {e}", exc_info=True)
     
     return jsonify({
         'message': 'Order created',
@@ -223,8 +289,8 @@ def get_orders():
     roles = user_info.get('realm_access', {}).get('roles', [])
     token = request.token
     
-    # Admin can see all orders, customers see only their own
-    if 'admin' in roles:
+    # Admin and florar can see all orders, customers see only their own
+    if 'admin' in roles or 'florar' in roles:
         orders = Order.query.order_by(Order.created_at.desc()).all()
     else:
         # Get user ID and filter orders
@@ -247,8 +313,8 @@ def get_order(order_id):
     roles = user_info.get('realm_access', {}).get('roles', [])
     token = request.token
     
-    # Check access
-    if 'admin' not in roles:
+    # Check access - admin and florar can see all orders, customers see only their own
+    if 'admin' not in roles and 'florar' not in roles:
         user_id = get_user_id_from_token(token)
         if not user_id or order.user_id != user_id:
             return jsonify({'error': 'Access denied'}), 403

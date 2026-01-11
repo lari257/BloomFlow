@@ -1,9 +1,13 @@
 from flask import Flask, jsonify, request, g
+from flask_cors import CORS
 from middleware import require_auth, verify_token
 from config import Config
 
 app = Flask(__name__)
 app.config.from_object(Config)
+
+# Enable CORS for all routes
+CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
 
 @app.route('/health', methods=['GET'])
 def health():

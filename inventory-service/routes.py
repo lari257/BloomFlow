@@ -382,17 +382,39 @@ def check_availability():
     all_available = True
     
     for flower_type_id, quantity in zip(flower_type_ids, quantities):
+        # Get all lots for this flower type to debug
+        all_lots = FlowerLot.query.filter(
+            FlowerLot.flower_type_id == flower_type_id
+        ).all()
+        
+        # Calculate available quantity with filters
         available_quantity = db.session.query(db.func.sum(FlowerLot.quantity)).filter(
             FlowerLot.flower_type_id == flower_type_id,
             FlowerLot.status == 'available',
-            FlowerLot.expiry_date >= date.today()
+            FlowerLot.expiry_date >= date.today(),
+            FlowerLot.quantity > 0
         ).scalar() or 0
+        
+        # Debug: count lots by status and expiry
+        today = date.today()
+        lots_info = []
+        for lot in all_lots:
+            is_expired = lot.expiry_date < today if lot.expiry_date else True
+            lots_info.append({
+                'lot_id': lot.id,
+                'quantity': lot.quantity,
+                'status': lot.status,
+                'expiry_date': lot.expiry_date.isoformat() if lot.expiry_date else None,
+                'is_expired': is_expired,
+                'is_available': lot.status == 'available' and not is_expired and lot.quantity > 0
+            })
         
         is_available = available_quantity >= quantity
         availability[flower_type_id] = {
             'required': quantity,
             'available': int(available_quantity),
-            'sufficient': is_available
+            'sufficient': is_available,
+            'lots_debug': lots_info  # Add debug info
         }
         
         if not is_available:
@@ -400,8 +422,131 @@ def check_availability():
     
     return jsonify({
         'availability': availability,
-        'all_available': all_available
+        'all_available': all_available,
+        'today': date.today().isoformat()  # Add today's date for debugging
     }), 200
+
+@bp.route('/inventory/reduce', methods=['POST'])
+@require_auth
+def reduce_inventory():
+    """Reduce inventory quantities for order items (FIFO - earliest expiry first)"""
+    data = request.get_json()
+    
+    if 'items' not in data or not data['items']:
+        return jsonify({'error': 'Items list is required'}), 400
+    
+    items = data['items']
+    reduction_results = {}
+    errors = []
+    
+    try:
+        # First, validate all items and check availability
+        for item in items:
+            flower_type_id = item.get('flower_type_id')
+            quantity_needed = item.get('quantity')
+            
+            if not flower_type_id or quantity_needed is None:
+                errors.append(f'Invalid item: missing flower_type_id or quantity')
+                continue
+            
+            if quantity_needed <= 0:
+                errors.append(f'Invalid quantity for flower_type_id {flower_type_id}: must be positive')
+                continue
+            
+            # Find available lots for this flower type, ordered by expiry date (FIFO)
+            # Primary sort: expiry_date ascending (earliest expiring first)
+            # Secondary sort: received_date ascending (older lots first if same expiry)
+            # Tertiary sort: id ascending (deterministic ordering)
+            lots = FlowerLot.query.filter(
+                FlowerLot.flower_type_id == flower_type_id,
+                FlowerLot.status == 'available',
+                FlowerLot.expiry_date >= date.today(),
+                FlowerLot.quantity > 0
+            ).order_by(
+                FlowerLot.expiry_date.asc(),
+                FlowerLot.received_date.asc(),
+                FlowerLot.id.asc()
+            ).all()
+            
+            # Calculate total available
+            total_available = sum(lot.quantity for lot in lots)
+            
+            if total_available < quantity_needed:
+                errors.append(f'Insufficient quantity for flower_type_id {flower_type_id}: need {quantity_needed}, have {total_available}')
+                continue
+        
+        # If any validation errors, return early
+        if errors:
+            return jsonify({
+                'error': 'Validation failed',
+                'errors': errors
+            }), 400
+        
+        # All validations passed, now reduce quantities
+        for item in items:
+            flower_type_id = item.get('flower_type_id')
+            quantity_needed = item.get('quantity')
+            
+            # Find available lots for this flower type, ordered by expiry date (FIFO)
+            # Primary sort: expiry_date ascending (earliest expiring first)
+            # Secondary sort: received_date ascending (older lots first if same expiry)
+            # Tertiary sort: id ascending (deterministic ordering)
+            lots = FlowerLot.query.filter(
+                FlowerLot.flower_type_id == flower_type_id,
+                FlowerLot.status == 'available',
+                FlowerLot.expiry_date >= date.today(),
+                FlowerLot.quantity > 0
+            ).order_by(
+                FlowerLot.expiry_date.asc(),
+                FlowerLot.received_date.asc(),
+                FlowerLot.id.asc()
+            ).all()
+            
+            # Reduce quantities from lots using FIFO (First In First Out)
+            # Takes from the lot that expires soonest first, then moves to next lot
+            # Example: Lot 1 expires in 4 days (20 flowers), Lot 2 expires in 2 days (5 flowers)
+            # Order needs 7 flowers: takes 5 from Lot 2, then 2 from Lot 1
+            remaining = quantity_needed
+            lot_updates = []
+            
+            for lot in lots:
+                if remaining <= 0:
+                    break
+                
+                # Take as many as needed from this lot, but not more than available
+                quantity_to_take = min(remaining, lot.quantity)
+                lot.quantity -= quantity_to_take
+                remaining -= quantity_to_take
+                
+                # Update lot status if quantity reaches 0
+                if lot.quantity == 0:
+                    lot.status = 'sold'
+                
+                lot_updates.append({
+                    'lot_id': lot.id,
+                    'quantity_taken': quantity_to_take,
+                    'remaining_quantity': lot.quantity
+                })
+            
+            reduction_results[flower_type_id] = {
+                'quantity_reduced': quantity_needed,
+                'lot_updates': lot_updates
+            }
+        
+        # Commit all changes at once
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Inventory reduced successfully',
+            'results': reduction_results
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            'error': f'Error reducing inventory: {str(e)}',
+            'results': reduction_results
+        }), 500
 
 @bp.route('/debug/token', methods=['GET'])
 @require_auth

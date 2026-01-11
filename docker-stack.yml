@@ -114,8 +114,14 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-bloomflow}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - target: 5672
+        published: 5672
+        protocol: tcp
+        mode: host
+      - target: 15672
+        published: 15672
+        protocol: tcp
+        mode: host
     networks:
       - bloomflow_network
     deploy:
@@ -203,6 +209,11 @@ services:
       AUTH_SERVICE_URL: http://auth-service:5000
       USER_SERVICE_URL: http://user-service:5000
       INVENTORY_SERVICE_URL: http://inventory-service:5000
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-bloomflow}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      BOUQUET_QUEUE_NAME: bouquet_assembly
       FLASK_ENV: production
     networks:
       - bloomflow_network
@@ -212,6 +223,7 @@ services:
       - auth-service
       - user-service
       - inventory-service
+      - rabbitmq
 
 
   bouquet-service:
@@ -230,6 +242,42 @@ services:
     depends_on:
       - auth-service
       - inventory-service
+
+  bouquet-worker:
+    image: bloomflow/bouquet-worker:latest
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-bloomflow}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      BOUQUET_QUEUE_NAME: bouquet_assembly
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bloomflow}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-bloomflow}_orders
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-bloomflow}
+      POSTGRES_DB: ${POSTGRES_DB:-bloomflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      ORDER_SERVICE_URL: http://order-service:5000
+      INVENTORY_SERVICE_URL: http://inventory-service:5000
+    networks:
+      - bloomflow_network
+    depends_on:
+      - rabbitmq
+      - postgres
+      - db-init
+      - order-service
+    deploy:
+      replicas: 3
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
 
 networks:
