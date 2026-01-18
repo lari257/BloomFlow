@@ -69,17 +69,15 @@ const OrderList = () => {
     }
   }
 
-  // Map status: backend uses 'processing', design uses 'ready'
+  // Map status for UI
   const mapStatus = (status) => {
-    if (status === 'processing') return 'ready'
+    if (status === 'pending_payment') return 'pending'
     return status
   }
 
   const statusConfig = {
     pending: { label: 'Pending', color: '#f5a623', bg: '#fef7e8' },
     confirmed: { label: 'Confirmed', color: '#4a90d9', bg: '#e8f2fc' },
-    ready: { label: 'Ready', color: '#7b68ee', bg: '#f0effe' },
-    processing: { label: 'Ready', color: '#7b68ee', bg: '#f0effe' },
     completed: { label: 'Completed', color: '#50c878', bg: '#e8f8ee' },
     cancelled: { label: 'Cancelled', color: '#999', bg: '#f5f5f5' },
   }
@@ -121,7 +119,14 @@ const OrderList = () => {
   const formattedOrders = orders.map(formatOrder)
 
   const filteredOrders = formattedOrders.filter(order => {
-    const matchesStatus = filterStatus === 'all' || order.displayStatus === filterStatus
+    let matchesStatus = false;
+    if (filterStatus === 'all') {
+      matchesStatus = true;
+    } else if (filterStatus === 'pending') {
+      matchesStatus = order.status === 'pending' || order.status === 'pending_payment';
+    } else {
+      matchesStatus = order.displayStatus === filterStatus;
+    }
     const matchesSearch = 
       order.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       `ORD-${order.id}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -136,8 +141,7 @@ const OrderList = () => {
   // Calculate stats
   const today = new Date().toISOString().split('T')[0]
   const todayOrders = formattedOrders.filter(o => o.createdDate === today && o.displayStatus !== 'cancelled').length
-  const pendingOrders = formattedOrders.filter(o => o.displayStatus === 'pending').length
-  const readyOrders = formattedOrders.filter(o => o.displayStatus === 'ready').length
+  const pendingOrders = formattedOrders.filter(o => o.status === 'pending' || o.status === 'pending_payment').length
   const todayRevenue = formattedOrders
     .filter(o => o.createdDate === today && o.displayStatus !== 'cancelled')
     .reduce((sum, o) => sum + getOrderTotal(o.items), 0)
@@ -226,13 +230,7 @@ const OrderList = () => {
             <span style={styles.statLabel}>Pending</span>
           </div>
         </div>
-        <div style={styles.statCard} className="stat-card">
-          <div style={styles.statIcon}>✓</div>
-          <div style={styles.statInfo}>
-            <span style={styles.statValue}>{readyOrders}</span>
-            <span style={styles.statLabel}>Ready for Pickup</span>
-          </div>
-        </div>
+        {/* Removed Ready for Pickup stat */}
         <div style={styles.statCard} className="stat-card">
           <div style={styles.statIcon}>◈</div>
           <div style={styles.statInfo}>
@@ -247,7 +245,7 @@ const OrderList = () => {
         {/* Toolbar */}
         <div style={styles.toolbar}>
           <div style={styles.filterGroup}>
-            {['all', 'pending', 'confirmed', 'ready', 'completed'].map(status => (
+            {['all', 'pending', 'confirmed', 'completed'].map(status => (
               <button
                 key={status}
                 onClick={() => setFilterStatus(status)}
@@ -264,10 +262,9 @@ const OrderList = () => {
                     background: filterStatus === status ? 'rgba(255,255,255,0.3)' : statusConfig[status]?.bg,
                     color: filterStatus === status ? 'white' : statusConfig[status]?.color,
                   }}>
-                    {formattedOrders.filter(o => {
-                      const displayStatus = mapStatus(o.status)
-                      return displayStatus === status
-                    }).length}
+                    {status === 'pending'
+                      ? formattedOrders.filter(o => o.status === 'pending' || o.status === 'pending_payment').length
+                      : formattedOrders.filter(o => mapStatus(o.status) === status).length}
                   </span>
                 )}
               </button>

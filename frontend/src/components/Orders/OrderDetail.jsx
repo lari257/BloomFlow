@@ -135,11 +135,13 @@ const OrderDetail = () => {
   // Determine if the current user can cancel this order
   const currentUser = getCurrentUserInfo()
   const currentUserId = currentUser && currentUser.id ? String(currentUser.id) : null
+  const isPendingStatus = order.status === 'pending' || order.status === 'pending_payment';
+  const isUnpaid = order.payment_status !== 'succeeded';
   const canCancel = (
-    // Admin or florar can cancel any unpaid order
-    (canEdit && order.payment_status === 'pending' && order.status !== 'cancelled') ||
-    // Client can cancel their own unpaid order
-    (isClient && order.payment_status === 'pending' && order.status !== 'cancelled' && order.user_id && currentUserId && String(order.user_id) === currentUserId)
+    // Admin or florar can cancel any unpaid, uncancelled, pending/pending_payment order
+    (canEdit && isPendingStatus && isUnpaid && order.status !== 'cancelled') ||
+    // Client can cancel their own unpaid, uncancelled, pending/pending_payment order
+    (isClient && isPendingStatus && isUnpaid && order.status !== 'cancelled' && order.user_id && currentUserId && String(order.user_id) === currentUserId)
   )
 
   return (
