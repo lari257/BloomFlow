@@ -110,17 +110,19 @@ def require_admin(f):
 @bp.route('/flowers', methods=['GET'])
 @require_auth
 def get_flowers():
-    """Get list of all flower types"""
+    """Get list of all flower types with stock information"""
     flowers = FlowerType.query.all()
     return jsonify({
-        'flowers': [flower.to_dict() for flower in flowers]
+        'flowers': [flower.to_dict_with_stock() for flower in flowers]
     }), 200
 
 @bp.route('/flowers/<int:flower_id>', methods=['GET'])
 @require_auth
 def get_flower(flower_id):
     """Get flower type by ID"""
-    flower = FlowerType.query.get_or_404(flower_id)
+    flower = FlowerType.query.get(flower_id)
+    if not flower:
+        return jsonify({'error': 'Flower type not found'}), 404
     return jsonify({
         'flower': flower.to_dict()
     }), 200
@@ -161,7 +163,9 @@ def create_flower():
 @require_role('admin', 'florar')
 def update_flower(flower_id):
     """Update flower type"""
-    flower = FlowerType.query.get_or_404(flower_id)
+    flower = FlowerType.query.get(flower_id)
+    if not flower:
+        return jsonify({'error': 'Flower type not found'}), 404
     data = request.get_json()
     
     if 'name' in data:
@@ -186,7 +190,9 @@ def update_flower(flower_id):
 @require_admin
 def delete_flower(flower_id):
     """Delete flower type (admin only)"""
-    flower = FlowerType.query.get_or_404(flower_id)
+    flower = FlowerType.query.get(flower_id)
+    if not flower:
+        return jsonify({'error': 'Flower type not found'}), 404
     db.session.delete(flower)
     db.session.commit()
     
@@ -222,7 +228,9 @@ def get_lots():
 @require_auth
 def get_lot(lot_id):
     """Get flower lot by ID"""
-    lot = FlowerLot.query.get_or_404(lot_id)
+    lot = FlowerLot.query.get(lot_id)
+    if not lot:
+        return jsonify({'error': 'Flower lot not found'}), 404
     return jsonify({
         'lot': lot.to_dict()
     }), 200
@@ -268,7 +276,9 @@ def create_lot():
 @require_role('admin', 'florar')
 def update_lot(lot_id):
     """Update flower lot (admin or florar)"""
-    lot = FlowerLot.query.get_or_404(lot_id)
+    lot = FlowerLot.query.get(lot_id)
+    if not lot:
+        return jsonify({'error': 'Flower lot not found'}), 404
     data = request.get_json()
     
     if 'quantity' in data:
@@ -279,7 +289,7 @@ def update_lot(lot_id):
         except ValueError:
             return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
     if 'status' in data:
-        if data['status'] not in ['available', 'reserved', 'expired', 'sold']:
+        if data['status'] not in ['available', 'expired', 'sold']:
             return jsonify({'error': 'Invalid status'}), 400
         lot.status = data['status']
     
@@ -294,7 +304,9 @@ def update_lot(lot_id):
 @require_role('admin', 'florar')
 def update_lot_quantity(lot_id):
     """Update lot quantity (admin or florar)"""
-    lot = FlowerLot.query.get_or_404(lot_id)
+    lot = FlowerLot.query.get(lot_id)
+    if not lot:
+        return jsonify({'error': 'Flower lot not found'}), 404
     data = request.get_json()
     
     if 'quantity' not in data:
@@ -315,7 +327,9 @@ def update_lot_quantity(lot_id):
 @require_admin
 def delete_lot(lot_id):
     """Delete flower lot (admin only)"""
-    lot = FlowerLot.query.get_or_404(lot_id)
+    lot = FlowerLot.query.get(lot_id)
+    if not lot:
+        return jsonify({'error': 'Flower lot not found'}), 404
     db.session.delete(lot)
     db.session.commit()
     
@@ -429,7 +443,11 @@ def check_availability():
 @bp.route('/inventory/reduce', methods=['POST'])
 @require_auth
 def reduce_inventory():
-    """Reduce inventory quantities for order items (FIFO - earliest expiry first)"""
+    """Reduce inventory quantities for order items (FIFO - earliest expiry first)
+    
+    Uses database-level locking (SELECT FOR UPDATE) to prevent race conditions
+    when multiple orders try to reduce the same inventory simultaneously.
+    """
     data = request.get_json()
     
     if 'items' not in data or not data['items']:
@@ -440,7 +458,7 @@ def reduce_inventory():
     errors = []
     
     try:
-        # First, validate all items and check availability
+        # First, validate all items and check availability WITH LOCKING
         for item in items:
             flower_type_id = item.get('flower_type_id')
             quantity_needed = item.get('quantity')
@@ -454,6 +472,7 @@ def reduce_inventory():
                 continue
             
             # Find available lots for this flower type, ordered by expiry date (FIFO)
+            # Using FOR UPDATE to lock these rows and prevent concurrent modifications
             # Primary sort: expiry_date ascending (earliest expiring first)
             # Secondary sort: received_date ascending (older lots first if same expiry)
             # Tertiary sort: id ascending (deterministic ordering)
@@ -466,17 +485,19 @@ def reduce_inventory():
                 FlowerLot.expiry_date.asc(),
                 FlowerLot.received_date.asc(),
                 FlowerLot.id.asc()
-            ).all()
+            ).with_for_update().all()  # LOCK rows for update
             
             # Calculate total available
             total_available = sum(lot.quantity for lot in lots)
             
             if total_available < quantity_needed:
+                db.session.rollback()  # Release locks
                 errors.append(f'Insufficient quantity for flower_type_id {flower_type_id}: need {quantity_needed}, have {total_available}')
                 continue
         
         # If any validation errors, return early
         if errors:
+            db.session.rollback()  # Release any locks
             return jsonify({
                 'error': 'Validation failed',
                 'errors': errors
@@ -488,9 +509,7 @@ def reduce_inventory():
             quantity_needed = item.get('quantity')
             
             # Find available lots for this flower type, ordered by expiry date (FIFO)
-            # Primary sort: expiry_date ascending (earliest expiring first)
-            # Secondary sort: received_date ascending (older lots first if same expiry)
-            # Tertiary sort: id ascending (deterministic ordering)
+            # Rows are already locked from validation step, but we query again to get current values
             lots = FlowerLot.query.filter(
                 FlowerLot.flower_type_id == flower_type_id,
                 FlowerLot.status == 'available',
@@ -500,7 +519,7 @@ def reduce_inventory():
                 FlowerLot.expiry_date.asc(),
                 FlowerLot.received_date.asc(),
                 FlowerLot.id.asc()
-            ).all()
+            ).with_for_update().all()
             
             # Reduce quantities from lots using FIFO (First In First Out)
             # Takes from the lot that expires soonest first, then moves to next lot
@@ -557,3 +576,23 @@ def debug_token():
         'token_info': user_info,
         'extracted_roles': get_roles_from_token(user_info)
     }), 200
+
+# ============================================================
+# INTERNAL ENDPOINTS (no auth required - for service-to-service)
+# ============================================================
+
+@bp.route('/internal/flowers', methods=['GET'])
+def internal_get_flowers():
+    """Get all flowers (internal endpoint for service-to-service communication)"""
+    flowers = FlowerType.query.all()
+    return jsonify({
+        'flowers': [flower.to_dict() for flower in flowers]
+    }), 200
+
+@bp.route('/internal/flowers/<int:flower_id>', methods=['GET'])
+def internal_get_flower(flower_id):
+    """Get flower by ID (internal endpoint for service-to-service communication)"""
+    flower = FlowerType.query.get(flower_id)
+    if not flower:
+        return jsonify({'error': 'Flower not found'}), 404
+    return jsonify(flower.to_dict()), 200

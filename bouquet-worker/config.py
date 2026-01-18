@@ -15,6 +15,7 @@ class Config:
     RABBITMQ_USER = os.getenv('RABBITMQ_USER', 'bloomflow')
     RABBITMQ_PASSWORD = os.getenv('RABBITMQ_PASSWORD', 'rabbitmq123')
     BOUQUET_QUEUE_NAME = os.getenv('BOUQUET_QUEUE_NAME', 'bouquet_assembly')
+    NOTIFICATION_QUEUE_NAME = os.getenv('NOTIFICATION_QUEUE_NAME', 'notifications')
     
     # Service URLs
     ORDER_SERVICE_URL = os.getenv('ORDER_SERVICE_URL', 'http://order-service:5000')

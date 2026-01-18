@@ -28,6 +28,7 @@ class BouquetWorker:
         self.config = config
         self.connection = None
         self.channel = None
+        self.notification_channel = None
         self.db_engine = None
         self.db_session = None
         self.init_database()
@@ -73,6 +74,19 @@ class BouquetWorker:
                 )
                 
                 logger.info(f"Connected to RabbitMQ at {config.RABBITMQ_HOST}:{config.RABBITMQ_PORT}")
+                
+                # Create a separate channel for publishing notifications
+                try:
+                    self.notification_channel = self.connection.channel()
+                    self.notification_channel.queue_declare(
+                        queue=config.NOTIFICATION_QUEUE_NAME,
+                        durable=True
+                    )
+                    logger.info(f"Notification channel ready for queue '{config.NOTIFICATION_QUEUE_NAME}'")
+                except Exception as e:
+                    logger.warning(f"Could not setup notification channel: {e}")
+                    self.notification_channel = None
+                
                 return
                 
             except Exception as e:
@@ -104,13 +118,34 @@ class BouquetWorker:
             # - Packaging
             # - etc.
             
-            # For now, we'll just simulate the time it takes
-            assembly_time = 2  # seconds
-            logger.info(f"Assembling bouquet for order {order_id} with {len(items)} item types...")
-            time.sleep(assembly_time)
+            # Calculate assembly time based on complexity (number of items)
+            # Base time + additional time per item type
+            base_time = 3  # Base assembly time in seconds
+            time_per_item = 1  # Additional seconds per item type
+            assembly_time = base_time + (len(items) * time_per_item)
+            
+            # Cap the assembly time for testing purposes
+            assembly_time = min(assembly_time, 10)
+            
+            logger.info(f"Assembling bouquet for order {order_id} with {len(items)} item types (estimated time: {assembly_time}s)...")
+            
+            # Simulate the assembly work in stages
+            stages = ['Selecting flowers', 'Arranging bouquet', 'Quality check', 'Packaging']
+            time_per_stage = assembly_time / len(stages)
+            
+            for stage in stages:
+                logger.info(f"Order {order_id}: {stage}...")
+                time.sleep(time_per_stage)
+            
+            # Get user_id from database before updating status
+            user_id = self.get_order_user_id(order_id)
             
             # Update order status to 'completed'
             self.update_order_status(order_id, 'completed')
+            
+            # Publish notification for completed order
+            if user_id:
+                self.publish_notification('order_completed', order_id, user_id)
             
             logger.info(f"Successfully assembled bouquet for order {order_id}")
             return True
@@ -147,6 +182,53 @@ class BouquetWorker:
             logger.error(f"Error updating order status: {e}")
             if self.db_session:
                 self.db_session.rollback()
+    
+    def get_order_user_id(self, order_id):
+        """Get the user_id for an order from the database"""
+        try:
+            if not self.db_session:
+                logger.warning("Database session not available")
+                return None
+            
+            query = text("SELECT user_id FROM orders WHERE id = :order_id")
+            result = self.db_session.execute(query, {'order_id': order_id}).fetchone()
+            
+            if result:
+                return result[0]
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting user_id for order {order_id}: {e}")
+            return None
+    
+    def publish_notification(self, notification_type, order_id, user_id):
+        """Publish a notification to the notifications queue"""
+        try:
+            if not self.notification_channel:
+                logger.warning("Notification channel not available, skipping notification")
+                return False
+            
+            message = {
+                'type': notification_type,
+                'order_id': order_id,
+                'user_id': user_id
+            }
+            
+            self.notification_channel.basic_publish(
+                exchange='',
+                routing_key=config.NOTIFICATION_QUEUE_NAME,
+                body=json.dumps(message),
+                properties=pika.BasicProperties(
+                    delivery_mode=2  # Make message persistent
+                )
+            )
+            
+            logger.info(f"Published {notification_type} notification for order {order_id} to user {user_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error publishing notification: {e}")
+            return False
     
     def on_message(self, ch, method, properties, body):
         """Callback for processing messages from RabbitMQ"""

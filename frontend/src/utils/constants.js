@@ -1,11 +1,12 @@
-// API Endpoints
+// API Endpoints - using Vite proxy to avoid CORS issues
 export const API_ENDPOINTS = {
-  KEYCLOAK: 'http://localhost:8080/realms/bloomflow/protocol/openid-connect/token',
-  AUTH_SERVICE: 'http://localhost:5001',
-  USER_SERVICE: 'http://localhost:5002',
-  INVENTORY_SERVICE: 'http://localhost:5003',
-  ORDER_SERVICE: 'http://localhost:5004',
-  BOUQUET_SERVICE: 'http://localhost:5005'
+  KEYCLOAK: '/keycloak/realms/bloomflow/protocol/openid-connect/token',
+  AUTH_SERVICE: '/api/auth',
+  USER_SERVICE: '/api/users',
+  INVENTORY_SERVICE: '/api/inventory',
+  ORDER_SERVICE: '/api/orders',
+  BOUQUET_SERVICE: '/api/bouquet',
+  REPORTS_SERVICE: '/api/reports'
 }
 
 // Keycloak Configuration

@@ -8,6 +8,175 @@ config = Config()
 
 bp = Blueprint('users', __name__)
 
+
+# ============================================================
+# KEYCLOAK ADMIN API HELPERS
+# ============================================================
+
+def get_keycloak_admin_token():
+    """Get admin access token from Keycloak master realm"""
+    try:
+        response = requests.post(
+            f"{config.KEYCLOAK_URL}/realms/master/protocol/openid-connect/token",
+            data={
+                'grant_type': 'password',
+                'client_id': 'admin-cli',
+                'username': config.KEYCLOAK_ADMIN_USER,
+                'password': config.KEYCLOAK_ADMIN_PASSWORD
+            },
+            timeout=10
+        )
+        if response.status_code == 200:
+            return response.json().get('access_token')
+        else:
+            print(f"Failed to get admin token: {response.status_code} - {response.text}")
+            return None
+    except Exception as e:
+        print(f"Error getting admin token: {e}")
+        return None
+
+
+def get_keycloak_client_role_id(admin_token, client_id, role_name):
+    """Get the role ID for a client role in Keycloak"""
+    try:
+        # First get the client internal ID
+        clients_response = requests.get(
+            f"{config.KEYCLOAK_URL}/admin/realms/{config.KEYCLOAK_REALM}/clients",
+            headers={'Authorization': f'Bearer {admin_token}'},
+            params={'clientId': client_id},
+            timeout=10
+        )
+        if clients_response.status_code != 200:
+            print(f"Failed to get clients: {clients_response.text}")
+            return None, None
+        
+        clients = clients_response.json()
+        if not clients:
+            print(f"Client {client_id} not found")
+            return None, None
+        
+        client_uuid = clients[0]['id']
+        
+        # Get the role
+        role_response = requests.get(
+            f"{config.KEYCLOAK_URL}/admin/realms/{config.KEYCLOAK_REALM}/clients/{client_uuid}/roles/{role_name}",
+            headers={'Authorization': f'Bearer {admin_token}'},
+            timeout=10
+        )
+        if role_response.status_code != 200:
+            print(f"Failed to get role: {role_response.text}")
+            return client_uuid, None
+        
+        return client_uuid, role_response.json()
+    except Exception as e:
+        print(f"Error getting role: {e}")
+        return None, None
+
+
+def get_keycloak_realm_role(admin_token, role_name):
+    """Get a realm role from Keycloak"""
+    try:
+        response = requests.get(
+            f"{config.KEYCLOAK_URL}/admin/realms/{config.KEYCLOAK_REALM}/roles/{role_name}",
+            headers={'Authorization': f'Bearer {admin_token}'},
+            timeout=10
+        )
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"Failed to get realm role: {response.text}")
+            return None
+    except Exception as e:
+        print(f"Error getting realm role: {e}")
+        return None
+
+
+def assign_keycloak_realm_role(user_keycloak_id, role_name):
+    """Assign a realm role to a user in Keycloak"""
+    admin_token = get_keycloak_admin_token()
+    if not admin_token:
+        return False, "Could not get admin token"
+    
+    # Get the role details
+    role = get_keycloak_realm_role(admin_token, role_name)
+    if not role:
+        return False, f"Role {role_name} not found in Keycloak"
+    
+    # Assign the role to the user
+    try:
+        response = requests.post(
+            f"{config.KEYCLOAK_URL}/admin/realms/{config.KEYCLOAK_REALM}/users/{user_keycloak_id}/role-mappings/realm",
+            headers={
+                'Authorization': f'Bearer {admin_token}',
+                'Content-Type': 'application/json'
+            },
+            json=[role],
+            timeout=10
+        )
+        if response.status_code in [200, 204]:
+            print(f"Successfully assigned role {role_name} to user {user_keycloak_id}")
+            return True, "Role assigned successfully"
+        else:
+            print(f"Failed to assign role: {response.status_code} - {response.text}")
+            return False, f"Failed to assign role: {response.text}"
+    except Exception as e:
+        print(f"Error assigning role: {e}")
+        return False, str(e)
+
+
+def create_keycloak_user(username, password, email, first_name, last_name):
+    """Create a new user in Keycloak"""
+    admin_token = get_keycloak_admin_token()
+    if not admin_token:
+        return False, None, "Could not get admin token"
+    
+    try:
+        # Create the user
+        user_data = {
+            'username': username,
+            'email': email,
+            'firstName': first_name,
+            'lastName': last_name,
+            'enabled': True,
+            'emailVerified': True,
+            'requiredActions': [],
+            'credentials': [{
+                'type': 'password',
+                'value': password,
+                'temporary': False
+            }]
+        }
+        
+        response = requests.post(
+            f"{config.KEYCLOAK_URL}/admin/realms/{config.KEYCLOAK_REALM}/users",
+            headers={
+                'Authorization': f'Bearer {admin_token}',
+                'Content-Type': 'application/json'
+            },
+            json=user_data,
+            timeout=10
+        )
+        
+        if response.status_code == 201:
+            # Get the user ID from the Location header
+            location = response.headers.get('Location', '')
+            user_id = location.split('/')[-1] if location else None
+            
+            if user_id:
+                # Assign the client role by default
+                assign_keycloak_realm_role(user_id, 'client')
+            
+            return True, user_id, "User created successfully"
+        elif response.status_code == 409:
+            return False, None, "Username or email already exists"
+        else:
+            print(f"Failed to create user: {response.status_code} - {response.text}")
+            return False, None, f"Failed to create user: {response.text}"
+    except Exception as e:
+        print(f"Error creating user: {e}")
+        return False, None, str(e)
+
+
 def verify_token():
     """Verify token with auth service"""
     token = request.headers.get('Authorization')
@@ -186,7 +355,9 @@ def get_user(user_id):
     user_sub = user_info.get('sub')
     token_roles = get_roles_from_token(user_info)
     
-    user = User.query.get_or_404(user_id)
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
     
     current_user = User.query.filter_by(keycloak_id=user_sub).first()
     is_own_profile = current_user and current_user.id == user_id
@@ -227,7 +398,9 @@ def update_user_role(user_id):
     if role not in ['admin', 'florar', 'client']:
         return jsonify({'error': 'Invalid role'}), 400
     
-    user = User.query.get_or_404(user_id)
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
     user.role = role
     db.session.commit()
     
@@ -270,7 +443,9 @@ def get_user_orders(user_id):
     user_sub = user_info.get('sub')
     token_roles = get_roles_from_token(user_info)
     
-    user = User.query.get_or_404(user_id)
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
     
     current_user = User.query.filter_by(keycloak_id=user_sub).first()
     is_own = current_user and current_user.id == user_id
@@ -293,6 +468,44 @@ def get_roles():
         'roles': [role.to_dict() for role in roles]
     }), 200
 
+@bp.route('/users/me/notifications', methods=['PUT'])
+@require_auth
+def update_notification_preferences():
+    """Update current user's notification preferences"""
+    user_info = request.current_user
+    user_sub = user_info.get('sub')
+    
+    user = User.query.filter_by(keycloak_id=user_sub).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    data = request.get_json()
+    
+    if 'email_notifications' in data:
+        user.email_notifications = bool(data['email_notifications'])
+    
+    db.session.commit()
+    
+    return jsonify({
+        'message': 'Notification preferences updated',
+        'user': user.to_dict()
+    }), 200
+
+@bp.route('/users/me/notifications', methods=['GET'])
+@require_auth
+def get_notification_preferences():
+    """Get current user's notification preferences"""
+    user_info = request.current_user
+    user_sub = user_info.get('sub')
+    
+    user = User.query.filter_by(keycloak_id=user_sub).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    return jsonify({
+        'email_notifications': user.email_notifications
+    }), 200
+
 @bp.route('/debug/token', methods=['GET'])
 @require_auth
 def debug_token():
@@ -302,3 +515,232 @@ def debug_token():
         'token_info': user_info,
         'extracted_roles': get_roles_from_token(user_info)
     }), 200
+
+
+# ============================================================
+# REGISTRATION WITH ROLE REQUEST
+# ============================================================
+
+@bp.route('/users/signup', methods=['POST'])
+def signup():
+    """
+    Create a new user account in Keycloak.
+    This is a public endpoint - no authentication required.
+    """
+    data = request.get_json() or {}
+    
+    # Validate required fields
+    required_fields = ['username', 'password', 'email', 'firstName', 'lastName']
+    for field in required_fields:
+        if not data.get(field):
+            return jsonify({'error': f'{field} is required'}), 400
+    
+    username = data['username']
+    password = data['password']
+    email = data['email']
+    first_name = data['firstName']
+    last_name = data['lastName']
+    requested_role = data.get('requestedRole', 'client')
+    
+    if requested_role not in ['client', 'florar']:
+        return jsonify({'error': 'Invalid role. Choose "client" or "florar"'}), 400
+    
+    # Validate password length
+    if len(password) < 6:
+        return jsonify({'error': 'Password must be at least 6 characters'}), 400
+    
+    # Create user in Keycloak
+    success, keycloak_id, message = create_keycloak_user(
+        username, password, email, first_name, last_name
+    )
+    
+    if not success:
+        return jsonify({'error': message}), 400
+    
+    # Create user in local database
+    if requested_role == 'florar':
+        # Florar needs admin approval
+        user = User(
+            keycloak_id=keycloak_id,
+            email=email,
+            name=username,
+            role='client',  # Start as client
+            requested_role='florar',  # Requested florar role
+            status='pending_approval'  # Needs admin approval
+        )
+        db.session.add(user)
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Account created! Your florist account request is pending admin approval.',
+            'user': user.to_dict(),
+            'pending_approval': True
+        }), 201
+    else:
+        # Regular client - active immediately
+        user = User(
+            keycloak_id=keycloak_id,
+            email=email,
+            name=username,
+            role='client',
+            status='active'
+        )
+        db.session.add(user)
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Account created successfully! You can now login.',
+            'user': user.to_dict()
+        }), 201
+
+
+@bp.route('/users/register', methods=['POST'])
+@require_auth
+def register_with_role():
+    """
+    Register user with optional role request.
+    If role 'florar' is requested, account needs admin approval.
+    If role 'client' or no role specified, account is active immediately.
+    """
+    user_info = request.current_user
+    data = request.get_json() or {}
+    requested_role = data.get('requested_role', 'client')
+    
+    if requested_role not in ['client', 'florar']:
+        return jsonify({'error': 'Invalid role. Choose "client" or "florar"'}), 400
+    
+    user_sub = user_info.get('sub')
+    email = user_info.get('email')
+    username = user_info.get('preferred_username', email)
+    
+    # Check if user already exists
+    existing_user = User.query.filter_by(keycloak_id=user_sub).first()
+    if existing_user:
+        return jsonify({
+            'message': 'User already registered',
+            'user': existing_user.to_dict()
+        }), 200
+    
+    # Create user based on role request
+    if requested_role == 'florar':
+        # Florar needs admin approval
+        user = User(
+            keycloak_id=user_sub,
+            email=email,
+            name=username,
+            role='client',  # Start as client
+            requested_role='florar',  # Requested florar role
+            status='pending_approval'  # Needs admin approval
+        )
+        db.session.add(user)
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Registration submitted. Your florar account request is pending admin approval.',
+            'user': user.to_dict(),
+            'pending_approval': True
+        }), 201
+    else:
+        # Regular client - active immediately
+        user = User(
+            keycloak_id=user_sub,
+            email=email,
+            name=username,
+            role='client',
+            status='active'
+        )
+        db.session.add(user)
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Registration successful',
+            'user': user.to_dict()
+        }), 201
+
+
+@bp.route('/users/pending-approvals', methods=['GET'])
+@require_admin
+def get_pending_approvals():
+    """Get list of users pending florar approval (admin only)"""
+    pending_users = User.query.filter_by(status='pending_approval').all()
+    
+    return jsonify({
+        'pending_users': [user.to_dict() for user in pending_users],
+        'count': len(pending_users)
+    }), 200
+
+
+@bp.route('/users/<int:user_id>/approve', methods=['POST'])
+@require_admin
+def approve_florar(user_id):
+    """Approve a user's florar role request (admin only)"""
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    if user.status != 'pending_approval':
+        return jsonify({'error': 'User is not pending approval'}), 400
+    
+    if user.requested_role != 'florar':
+        return jsonify({'error': 'User did not request florar role'}), 400
+    
+    # Try to update Keycloak role first
+    keycloak_success, keycloak_message = assign_keycloak_realm_role(
+        user.keycloak_id, 
+        'florar'
+    )
+    
+    # Approve - update role and status in local database
+    user.role = 'florar'
+    user.status = 'active'
+    user.requested_role = None  # Clear the request
+    db.session.commit()
+    
+    return jsonify({
+        'message': f'User {user.email} approved as florar',
+        'user': user.to_dict(),
+        'keycloak_updated': keycloak_success,
+        'keycloak_message': keycloak_message
+    }), 200
+
+
+@bp.route('/users/<int:user_id>/reject', methods=['POST'])
+@require_admin
+def reject_florar(user_id):
+    """Reject a user's florar role request (admin only)"""
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    data = request.get_json() or {}
+    reason = data.get('reason', 'Request rejected by administrator')
+    
+    if user.status != 'pending_approval':
+        return jsonify({'error': 'User is not pending approval'}), 400
+    
+    # Reject - keep as client but make active
+    user.role = 'client'
+    user.status = 'active'
+    user.requested_role = None  # Clear the request
+    db.session.commit()
+    
+    return jsonify({
+        'message': f'Florar request rejected for {user.email}',
+        'reason': reason,
+        'user': user.to_dict()
+    }), 200
+
+
+# ============================================================
+# INTERNAL SERVICE-TO-SERVICE ENDPOINTS (no auth required)
+# ============================================================
+
+@bp.route('/internal/users/<int:user_id>', methods=['GET'])
+def get_user_internal(user_id):
+    """
+    Internal endpoint for service-to-service communication.
+    Used by notification-service to fetch user details.
+    """
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    return jsonify({'user': user.to_dict()}), 200

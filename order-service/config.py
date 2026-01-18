@@ -41,8 +41,14 @@ class Config:
     RABBITMQ_USER = os.getenv('RABBITMQ_USER', 'bloomflow')
     RABBITMQ_PASSWORD = os.getenv('RABBITMQ_PASSWORD', 'rabbitmq123')
     BOUQUET_QUEUE_NAME = os.getenv('BOUQUET_QUEUE_NAME', 'bouquet_assembly')
+    NOTIFICATION_QUEUE_NAME = os.getenv('NOTIFICATION_QUEUE_NAME', 'notifications')
     
     # Flask Configuration
     FLASK_ENV = os.getenv('FLASK_ENV', 'production')
     DEBUG = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
+    
+    # Stripe Configuration
+    STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY', '')
+    STRIPE_PUBLISHABLE_KEY = os.getenv('STRIPE_PUBLISHABLE_KEY', '')
+    STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', '')
 

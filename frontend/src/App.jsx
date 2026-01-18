@@ -3,13 +3,18 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import Layout from './components/Layout/Layout'
 import Login from './components/Auth/Login'
+import Signup from './components/Auth/Signup'
+import Register from './components/Auth/Register'
 import Dashboard from './components/Dashboard/Dashboard'
 import Inventory from './components/Inventory'
 import OrderList from './components/Orders/OrderList'
 import OrderDetail from './components/Orders/OrderDetail'
 import OrderForm from './components/Orders/OrderForm'
+import PaymentPage from './components/Payment/PaymentPage'
 import BouquetBuilder from './components/Bouquet/BouquetBuilder'
 import Profile from './components/Profile/Profile'
+import Reports from './components/Reports/Reports'
+import PendingApprovals from './components/Admin/PendingApprovals'
 import { hasAnyRole } from './utils/helpers'
 
 // Protected Route Component
@@ -33,6 +38,8 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
+      <Route path="/signup" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Signup />} />
+      <Route path="/register" element={isAuthenticated ? <Register /> : <Navigate to="/login" replace />} />
       
       <Route element={<Layout />}>
         <Route
@@ -72,6 +79,15 @@ function AppRoutes() {
         />
         
         <Route
+          path="/orders/:id/payment"
+          element={
+            <ProtectedRoute>
+              <PaymentPage />
+            </ProtectedRoute>
+          }
+        />
+        
+        <Route
           path="/orders/:id"
           element={
             <ProtectedRoute>
@@ -94,6 +110,24 @@ function AppRoutes() {
           element={
             <ProtectedRoute>
               <Profile />
+            </ProtectedRoute>
+          }
+        />
+        
+        <Route
+          path="/reports"
+          element={
+            <ProtectedRoute requiredRoles={['admin', 'florar']}>
+              <Reports />
+            </ProtectedRoute>
+          }
+        />
+        
+        <Route
+          path="/admin/approvals"
+          element={
+            <ProtectedRoute requiredRoles={['admin']}>
+              <PendingApprovals />
             </ProtectedRoute>
           }
         />

@@ -30,6 +30,27 @@ class FlowerType(db.Model):
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
     
+    def to_dict_with_stock(self):
+        """Convert flower type to dictionary with stock information"""
+        from datetime import date
+        # Calculate total available stock from non-expired lots
+        available_stock = sum(
+            lot.quantity for lot in self.lots 
+            if lot.status == 'available' and lot.expiry_date >= date.today() and lot.quantity > 0
+        )
+        return {
+            'id': self.id,
+            'name': self.name,
+            'color': self.color,
+            'seasonality': self.seasonality,
+            'price_per_unit': float(self.price_per_unit) if self.price_per_unit else 0.0,
+            'description': self.description,
+            'available_stock': available_stock,
+            'in_stock': available_stock > 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+    
     def __repr__(self):
         return f'<FlowerType {self.name}>'
 
@@ -42,7 +63,7 @@ class FlowerLot(db.Model):
     quantity = db.Column(db.Integer, nullable=False, default=0)
     expiry_date = db.Column(db.Date, nullable=False, index=True)
     received_date = db.Column(db.Date, default=datetime.utcnow, nullable=False)
-    status = db.Column(db.String(50), nullable=False, default='available', index=True)  # available, reserved, expired, sold
+    status = db.Column(db.String(50), nullable=False, default='available', index=True)  # available, expired, sold
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     

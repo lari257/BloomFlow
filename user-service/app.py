@@ -8,8 +8,8 @@ from routes import bp
 app = Flask(__name__)
 app.config.from_object(Config)
 
-# Enable CORS for all routes
-CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
+# Enable CORS for all routes - allow all origins for development
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 # Initialize database
 db = init_db(app)

@@ -104,9 +104,26 @@ def filter_by_season(flowers, season=None):
     
     return [f for f in flowers if is_seasonal(f.get('seasonality'), season)]
 
+def filter_by_stock(flowers):
+    """Filter flowers that are in stock"""
+    filtered = []
+    for flower in flowers:
+        # Check if flower is in stock (has available_stock > 0 or in_stock is True)
+        in_stock = flower.get('in_stock', False)
+        available_stock = flower.get('available_stock', 0)
+        
+        # A flower is considered in stock if either in_stock is True or available_stock > 0
+        if in_stock or available_stock > 0:
+            filtered.append(flower)
+    
+    return filtered
+
 def apply_composition_rules(flowers, budget=None, colors=None, season=None, style=None):
     """Apply all composition rules to filter flowers"""
     filtered = flowers.copy()
+    
+    # First filter by stock availability
+    filtered = filter_by_stock(filtered)
     
     # Apply filters in order
     if budget:
@@ -156,6 +173,12 @@ def generate_bouquet_configurations(available_flowers, budget, min_flowers=None,
                 # Distribute budget proportionally
                 flower_budget = (price / total_price) * budget
                 qty = max(1, int(flower_budget / price))
+                
+                # Respect available stock - don't suggest more than available
+                available_stock = flower.get('available_stock', float('inf'))
+                if available_stock is not None and available_stock > 0:
+                    qty = min(qty, available_stock)
+                
                 quantities[flower['id']] = qty
                 remaining_budget -= qty * price
                 total_quantity += qty
@@ -182,7 +205,8 @@ def generate_bouquet_configurations(available_flowers, budget, min_flowers=None,
                         'flower_name': flower.get('name'),
                         'quantity': qty,
                         'unit_price': unit_price,
-                        'subtotal': qty * unit_price
+                        'subtotal': qty * unit_price,
+                        'available_stock': flower.get('available_stock', 0)
                     })
                     config_total += qty * unit_price
             

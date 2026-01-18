@@ -2,11 +2,19 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: bloomflow/postgres-primary:latest
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-bloomflow}
       POSTGRES_USER: ${POSTGRES_USER:-bloomflow}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command: >
+      postgres
+      -c wal_level=replica
+      -c max_wal_senders=5
+      -c max_replication_slots=5
+      -c hot_standby=on
+      -c wal_keep_size=64MB
+      -c listen_addresses='*'
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -28,6 +36,83 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # Configure primary for replication after startup
+  postgres-init-replication:
+    image: postgres:15-alpine
+    command: >
+      sh -c "
+      echo 'Waiting for PostgreSQL primary...';
+      until pg_isready -h postgres -U $${POSTGRES_USER:-bloomflow}; do sleep 2; done;
+      sleep 5;
+      
+      echo 'Configuring replication on primary...';
+      export PGPASSWORD=$${POSTGRES_PASSWORD};
+      
+      # Add replication permission to pg_hba.conf via SQL
+      psql -h postgres -U $${POSTGRES_USER:-bloomflow} -d $${POSTGRES_DB:-bloomflow} -c \"
+        SELECT pg_reload_conf();
+      \" || true;
+      
+      # Create replication slot if not exists
+      psql -h postgres -U $${POSTGRES_USER:-bloomflow} -d $${POSTGRES_DB:-bloomflow} -c \"
+        SELECT CASE 
+          WHEN NOT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = 'replica_slot')
+          THEN pg_create_physical_replication_slot('replica_slot')
+          ELSE NULL
+        END;
+      \" || true;
+      
+      echo 'Replication configuration complete!';
+      "
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bloomflow}
+      POSTGRES_DB: ${POSTGRES_DB:-bloomflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    networks:
+      - bloomflow_network
+    depends_on:
+      - postgres
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: none
+
+  # PostgreSQL Read Replica for reports (doesn't load main database)
+  postgres-replica:
+    image: bloomflow/postgres-replica:latest
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bloomflow}
+      POSTGRES_USER: ${POSTGRES_USER:-bloomflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGUSER: ${POSTGRES_USER:-bloomflow}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - postgres_replica_data:/var/lib/postgresql/data
+    networks:
+      bloomflow_network:
+        aliases:
+          - postgres-replica
+          - bloomflow_postgres_replica
+    depends_on:
+      - postgres
+      - postgres-init-replication
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 10
+      placement:
+        constraints:
+          - node.role == manager
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bloomflow}"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
 
  
   db-init:
@@ -214,6 +299,10 @@ services:
       RABBITMQ_USER: ${RABBITMQ_USER:-bloomflow}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       BOUQUET_QUEUE_NAME: bouquet_assembly
+      NOTIFICATION_QUEUE_NAME: notifications
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
       FLASK_ENV: production
     networks:
       - bloomflow_network
@@ -251,6 +340,7 @@ services:
       RABBITMQ_USER: ${RABBITMQ_USER:-bloomflow}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       BOUQUET_QUEUE_NAME: bouquet_assembly
+      NOTIFICATION_QUEUE_NAME: notifications
       DATABASE_URL: postgresql://${POSTGRES_USER:-bloomflow}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-bloomflow}_orders
       POSTGRES_HOST: postgres
       POSTGRES_USER: ${POSTGRES_USER:-bloomflow}
@@ -270,7 +360,7 @@ services:
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 3
+        max_attempts: 10
       resources:
         limits:
           cpus: '0.5'
@@ -278,6 +368,85 @@ services:
         reservations:
           cpus: '0.25'
           memory: 256M
+
+  notification-service:
+    image: bloomflow/notification-service:latest
+    ports:
+      - target: 5000
+        published: 5006
+        protocol: tcp
+        mode: host
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-bloomflow}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      NOTIFICATION_QUEUE_NAME: notifications
+      USER_SERVICE_URL: http://user-service:5000
+      ORDER_SERVICE_URL: http://order-service:5000
+      MAIL_SERVER: ${MAIL_SERVER:-smtp.gmail.com}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USE_TLS: ${MAIL_USE_TLS:-True}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      MAIL_DEFAULT_SENDER: ${MAIL_DEFAULT_SENDER:-noreply@bloomflow.com}
+      FLASK_ENV: production
+    networks:
+      - bloomflow_network
+    depends_on:
+      - rabbitmq
+      - user-service
+      - order-service
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+  # Reports service - uses read replica to avoid loading main database
+  reports-service:
+    image: bloomflow/reports-service:latest
+    ports:
+      - target: 5000
+        published: 5007
+        protocol: tcp
+        mode: host
+    environment:
+      # Uses read replica for all queries
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bloomflow}:${POSTGRES_PASSWORD}@postgres-replica:5432/${POSTGRES_DB:-bloomflow}
+      DATABASE_ORDERS_URL: postgresql://${POSTGRES_USER:-bloomflow}:${POSTGRES_PASSWORD}@postgres-replica:5432/${POSTGRES_DB:-bloomflow}_orders
+      DATABASE_INVENTORY_URL: postgresql://${POSTGRES_USER:-bloomflow}:${POSTGRES_PASSWORD}@postgres-replica:5432/${POSTGRES_DB:-bloomflow}_inventory
+      POSTGRES_HOST: postgres-replica
+      POSTGRES_USER: ${POSTGRES_USER:-bloomflow}
+      POSTGRES_DB: ${POSTGRES_DB:-bloomflow}
+      AUTH_SERVICE_URL: http://auth-service:5000
+      FLASK_ENV: production
+    networks:
+      - bloomflow_network
+    depends_on:
+      - postgres-replica
+      - auth-service
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
 
 
 networks:
@@ -287,4 +456,6 @@ networks:
 
 volumes:
   postgres_data:
+    driver: local
+  postgres_replica_data:
     driver: local

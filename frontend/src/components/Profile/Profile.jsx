@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useAuth } from '../../context/AuthContext'
-import { getCurrentUser } from '../../services/users'
+import { getCurrentUser, getNotificationPreferences, updateNotificationPreferences } from '../../services/users'
 import { getRoleDisplayName } from '../../utils/helpers'
 import '../../styles/components.css'
 
@@ -8,20 +8,56 @@ const Profile = () => {
   const { user: tokenUser, getRoles } = useAuth()
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [emailNotifications, setEmailNotifications] = useState(true)
+  const [notificationLoading, setNotificationLoading] = useState(false)
+  const [notificationMessage, setNotificationMessage] = useState('')
   const roles = getRoles()
 
   useEffect(() => {
     loadUserData()
+    loadNotificationPreferences()
   }, [])
 
   const loadUserData = async () => {
     try {
       const response = await getCurrentUser()
       setUser(response.user)
+      if (response.user?.email_notifications !== undefined) {
+        setEmailNotifications(response.user.email_notifications)
+      }
     } catch (error) {
       console.error('Error loading user data:', error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadNotificationPreferences = async () => {
+    try {
+      const response = await getNotificationPreferences()
+      if (response?.email_notifications !== undefined) {
+        setEmailNotifications(response.email_notifications)
+      }
+    } catch (error) {
+      console.error('Error loading notification preferences:', error)
+    }
+  }
+
+  const handleNotificationToggle = async () => {
+    setNotificationLoading(true)
+    setNotificationMessage('')
+    try {
+      const newValue = !emailNotifications
+      await updateNotificationPreferences({ email_notifications: newValue })
+      setEmailNotifications(newValue)
+      setNotificationMessage(newValue ? 'Email notifications enabled' : 'Email notifications disabled')
+      setTimeout(() => setNotificationMessage(''), 3000)
+    } catch (error) {
+      console.error('Error updating notification preferences:', error)
+      setNotificationMessage('Failed to update preferences')
+      setTimeout(() => setNotificationMessage(''), 3000)
+    } finally {
+      setNotificationLoading(false)
     }
   }
 
@@ -166,6 +202,50 @@ const Profile = () => {
           </div>
         </div>
       )}
+
+      {/* Email Notification Settings */}
+      <div style={styles.section}>
+        <h3 style={styles.sectionTitle}>📧 Email Notifications</h3>
+        <div style={styles.notificationSection}>
+          <div style={styles.notificationRow}>
+            <div style={styles.notificationInfo}>
+              <span style={styles.notificationLabel}>Order Updates</span>
+              <span style={styles.notificationDescription}>
+                Receive email notifications when your order status changes (confirmed, processing, shipped, delivered)
+              </span>
+            </div>
+            <button 
+              onClick={handleNotificationToggle}
+              disabled={notificationLoading}
+              style={{
+                ...styles.toggleButton,
+                background: emailNotifications 
+                  ? 'linear-gradient(135deg, #e8b4b8 0%, #d4919a 100%)' 
+                  : '#e0e0e0',
+              }}
+            >
+              <span style={{
+                ...styles.toggleKnob,
+                transform: emailNotifications ? 'translateX(24px)' : 'translateX(0)',
+              }} />
+            </button>
+          </div>
+          {notificationMessage && (
+            <div style={{
+              ...styles.notificationFeedback,
+              background: notificationMessage.includes('Failed') ? '#ffebee' : '#e8f5e9',
+              color: notificationMessage.includes('Failed') ? '#c62828' : '#2e7d32',
+            }}>
+              {notificationMessage}
+            </div>
+          )}
+          <p style={styles.notificationNote}>
+            {emailNotifications 
+              ? '✓ You will receive email notifications about your orders' 
+              : '✗ Email notifications are currently disabled'}
+          </p>
+        </div>
+      </div>
     </div>
   )
 }
@@ -325,6 +405,7 @@ const styles = {
     border: '1px solid rgba(0,0,0,0.04)',
     position: 'relative',
     zIndex: 1,
+    marginTop: '24px',
   },
   sectionTitle: {
     fontFamily: '"Cormorant Garamond", serif',
@@ -337,6 +418,71 @@ const styles = {
     display: 'flex',
     flexWrap: 'wrap',
     gap: '12px',
+  },
+  notificationSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
+  },
+  notificationRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '16px 20px',
+    background: '#faf8f8',
+    borderRadius: '12px',
+    border: '1px solid rgba(0,0,0,0.04)',
+  },
+  notificationInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+    flex: 1,
+  },
+  notificationLabel: {
+    fontSize: '16px',
+    fontWeight: '500',
+    color: '#1a1a1a',
+  },
+  notificationDescription: {
+    fontSize: '13px',
+    color: '#888',
+    lineHeight: '1.4',
+  },
+  toggleButton: {
+    width: '56px',
+    height: '32px',
+    borderRadius: '16px',
+    border: 'none',
+    cursor: 'pointer',
+    position: 'relative',
+    transition: 'background 0.3s ease',
+    padding: 0,
+    boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.1)',
+  },
+  toggleKnob: {
+    position: 'absolute',
+    top: '4px',
+    left: '4px',
+    width: '24px',
+    height: '24px',
+    borderRadius: '50%',
+    background: 'white',
+    transition: 'transform 0.3s ease',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+  },
+  notificationFeedback: {
+    padding: '10px 16px',
+    borderRadius: '8px',
+    fontSize: '13px',
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  notificationNote: {
+    fontSize: '13px',
+    color: '#888',
+    margin: 0,
+    fontStyle: 'italic',
   },
 }
 

@@ -33,6 +33,12 @@ class Config:
     # Auth Service Configuration
     AUTH_SERVICE_URL = os.getenv('AUTH_SERVICE_URL', 'http://auth-service:5000')
     
+    # Keycloak Admin Configuration (for managing users/roles)
+    KEYCLOAK_URL = os.getenv('KEYCLOAK_URL', 'http://keycloak:8080')
+    KEYCLOAK_REALM = os.getenv('KEYCLOAK_REALM', 'bloomflow')
+    KEYCLOAK_ADMIN_USER = os.getenv('KEYCLOAK_ADMIN', 'admin')
+    KEYCLOAK_ADMIN_PASSWORD = os.getenv('KEYCLOAK_ADMIN_PASSWORD', 'admin123')
+    
     # Flask Configuration
     FLASK_ENV = os.getenv('FLASK_ENV', 'production')
     DEBUG = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'

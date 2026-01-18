@@ -21,7 +21,14 @@ const OrderForm = () => {
   const loadFlowers = async () => {
     try {
       const response = await getFlowers()
-      setFlowers(response.flowers || [])
+      // Filter to only show flowers that are in stock
+      const allFlowers = response.flowers || []
+      const inStockFlowers = allFlowers.filter(f => f.in_stock && f.available_stock > 0)
+      setFlowers(inStockFlowers)
+      
+      if (inStockFlowers.length === 0 && allFlowers.length > 0) {
+        setError('No flowers are currently in stock. Please check back later.')
+      }
     } catch (err) {
       setError('Failed to load flowers')
     } finally {
@@ -68,6 +75,16 @@ const OrderForm = () => {
       return
     }
 
+    // Check if any item exceeds available stock
+    for (const item of validItems) {
+      const flower = flowers.find(f => f.id === parseInt(item.flower_type_id))
+      if (flower && item.quantity > flower.available_stock) {
+        setError(`Not enough stock for ${flower.name}. Available: ${flower.available_stock}, Requested: ${item.quantity}`)
+        setSubmitting(false)
+        return
+      }
+    }
+
     try {
       const orderData = {
         items: validItems.map(item => ({
@@ -78,7 +95,8 @@ const OrderForm = () => {
       }
 
       const response = await createOrder(orderData)
-      navigate(`/orders/${response.order.id}`)
+      // Redirect to payment page after order creation
+      navigate(`/orders/${response.order.id}/payment`)
     } catch (err) {
       setError(err.message || 'Failed to create order')
     } finally {
@@ -188,7 +206,7 @@ const OrderForm = () => {
                       <option value="">Select a flower</option>
                       {flowers.map(flower => (
                         <option key={flower.id} value={flower.id}>
-                          {flower.name} - {formatCurrency(flower.price_per_unit)}
+                          {flower.name} - {formatCurrency(flower.price_per_unit)} ({flower.available_stock} in stock)
                         </option>
                       ))}
                     </select>

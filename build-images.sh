@@ -6,6 +6,12 @@ set -e
 
 echo "=== Building BloomFlow Docker Images ==="
 
+echo "Building postgres-primary (with replication support)..."
+docker build -t bloomflow/postgres-primary:latest ./postgres-primary
+
+echo "Building postgres-replica..."
+docker build -t bloomflow/postgres-replica:latest ./postgres-replica
+
 echo "Building auth-service..."
 docker build -t bloomflow/auth-service:latest ./auth-service
 
@@ -23,6 +29,12 @@ docker build -t bloomflow/bouquet-service:latest ./bouquet-service
 
 echo "Building bouquet-worker..."
 docker build -t bloomflow/bouquet-worker:latest ./bouquet-worker
+
+echo "Building notification-service..."
+docker build -t bloomflow/notification-service:latest ./notification-service
+
+echo "Building reports-service..."
+docker build -t bloomflow/reports-service:latest ./reports-service
 
 echo "=== All images built successfully ==="
 docker images | grep bloomflow

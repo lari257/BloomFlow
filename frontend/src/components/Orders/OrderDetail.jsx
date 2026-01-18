@@ -82,12 +82,21 @@ const OrderDetail = () => {
   }
 
   const statusConfig = {
+    pending_payment: { label: 'Payment Pending', color: '#f5a623', bg: '#fef7e8' },
     pending: { label: 'Pending', color: '#f5a623', bg: '#fef7e8' },
     confirmed: { label: 'Confirmed', color: '#4a90d9', bg: '#e8f2fc' },
     ready: { label: 'Ready', color: '#7b68ee', bg: '#f0effe' },
     processing: { label: 'Ready', color: '#7b68ee', bg: '#f0effe' },
     completed: { label: 'Completed', color: '#50c878', bg: '#e8f8ee' },
     cancelled: { label: 'Cancelled', color: '#999', bg: '#f5f5f5' },
+  }
+
+  const paymentStatusConfig = {
+    pending: { label: 'Payment Pending', color: '#f5a623', bg: '#fef7e8' },
+    processing: { label: 'Processing Payment', color: '#4a90d9', bg: '#e8f2fc' },
+    succeeded: { label: 'Payment Successful', color: '#50c878', bg: '#e8f8ee' },
+    failed: { label: 'Payment Failed', color: '#c62828', bg: '#FFEBEE' },
+    refunded: { label: 'Refunded', color: '#999', bg: '#f5f5f5' },
   }
 
   if (loading) {
@@ -111,12 +120,14 @@ const OrderDetail = () => {
     )
   }
 
-  const statusOptions = ['pending', 'confirmed', 'processing', 'completed', 'cancelled']
+  const statusOptions = ['pending_payment', 'pending', 'confirmed', 'processing', 'completed', 'cancelled']
   const isAdmin = hasRole(roles, 'admin')
   const canEdit = hasAnyRole(roles, ['admin', 'florar'])
   const user = getUserInfo(order.user_id)
   const displayStatus = mapStatus(order.status)
   const statusInfo = statusConfig[displayStatus] || statusConfig[order.status] || statusConfig.pending
+  const paymentStatusInfo = paymentStatusConfig[order.payment_status] || paymentStatusConfig.pending
+  const needsPayment = order.status === 'pending_payment' || (order.payment_status && order.payment_status !== 'succeeded')
 
   return (
     <div style={styles.container}>
@@ -230,6 +241,37 @@ const OrderDetail = () => {
             )}
           </div>
         </div>
+
+        {/* Payment Status */}
+        {order.payment_status && (
+          <div style={styles.section}>
+            <h3 style={styles.sectionTitle}>Payment Status</h3>
+            <div style={styles.paymentInfo}>
+              <span style={{
+                ...styles.paymentBadge,
+                background: paymentStatusInfo.bg,
+                color: paymentStatusInfo.color,
+              }}>
+                {paymentStatusInfo.label}
+              </span>
+              {needsPayment && !canEdit && (
+                <button
+                  onClick={() => navigate(`/orders/${order.id}/payment`)}
+                  style={styles.payButton}
+                  className="btn"
+                >
+                  Pay Now
+                </button>
+              )}
+              {order.stripe_payment_intent_id && (
+                <div style={styles.paymentDetails}>
+                  <span style={styles.paymentLabel}>Payment Intent:</span>
+                  <span style={styles.paymentValue}>{order.stripe_payment_intent_id}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Notes */}
         {order.notes && (
@@ -477,6 +519,52 @@ const styles = {
     fontSize: '16px',
     fontWeight: '500',
     color: '#1a1a1a',
+  },
+  paymentInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
+  },
+  paymentBadge: {
+    fontSize: '14px',
+    padding: '8px 16px',
+    borderRadius: '20px',
+    fontWeight: '500',
+    letterSpacing: '0.3px',
+    alignSelf: 'flex-start',
+  },
+  payButton: {
+    padding: '12px 24px',
+    borderRadius: '10px',
+    fontSize: '14px',
+    fontFamily: '"Questrial", sans-serif',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+    border: 'none',
+    background: '#1a1a1a',
+    color: 'white',
+    letterSpacing: '0.5px',
+    alignSelf: 'flex-start',
+  },
+  paymentDetails: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+    padding: '12px',
+    background: '#faf8f8',
+    borderRadius: '8px',
+  },
+  paymentLabel: {
+    fontSize: '11px',
+    textTransform: 'uppercase',
+    letterSpacing: '1px',
+    color: '#999',
+  },
+  paymentValue: {
+    fontSize: '13px',
+    fontFamily: 'monospace',
+    color: '#666',
+    wordBreak: 'break-all',
   },
   notesBox: {
     padding: '16px 20px',

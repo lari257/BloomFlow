@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import '../../styles/components.css'
 
@@ -77,6 +77,13 @@ const Login = () => {
           >
             {loading ? 'Logging in...' : 'Login'}
           </button>
+          
+          <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
+            <span style={{ color: '#666' }}>New to BloomFlow? </span>
+            <Link to="/signup" style={{ color: '#E91E63', fontWeight: 'bold' }}>
+              Create an account
+            </Link>
+          </div>
         </form>
       </div>
     </div>

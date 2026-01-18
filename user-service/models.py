@@ -16,6 +16,9 @@ class User(db.Model):
     email = db.Column(db.String(255), unique=True, nullable=False, index=True)
     name = db.Column(db.String(255), nullable=True)
     role = db.Column(db.String(50), nullable=False, default='client')  # admin, florar, client
+    requested_role = db.Column(db.String(50), nullable=True)  # Role requested during registration (florar)
+    status = db.Column(db.String(50), nullable=False, default='active')  # active, pending_approval
+    email_notifications = db.Column(db.Boolean, default=True, nullable=False)  # Email notification preferences
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     
@@ -30,7 +33,10 @@ class User(db.Model):
             'email': self.email,
             'name': self.name,
             'role': self.role,
+            'requested_role': self.requested_role,
+            'status': self.status,
             'roles': [role.name for role in self.roles],
+            'email_notifications': self.email_notifications,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }

@@ -52,6 +52,22 @@ const Navbar = () => {
             </Link>
           </li>
           
+          {hasAnyRole(roles, ['admin', 'florar']) && (
+            <li>
+              <Link to="/reports" className={`nav-link ${isActive('/reports')}`}>
+                📊 Reports
+              </Link>
+            </li>
+          )}
+          
+          {hasAnyRole(roles, ['admin']) && (
+            <li>
+              <Link to="/admin/approvals" className={`nav-link ${isActive('/admin/approvals')}`}>
+                🔐 Approvals
+              </Link>
+            </li>
+          )}
+          
           <li>
             <Link to="/profile" className={`nav-link ${isActive('/profile')}`}>
               Profile
