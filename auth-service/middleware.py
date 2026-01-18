@@ -112,8 +112,6 @@ def verify_token(token):
         log_debug("Got public key, verifying JWT signature...")
         
         # Verify and decode token using public key
-        # Note: We verify signature and expiration, but audience is optional
-        # as Keycloak tokens may have different audiences
         try:
             decoded_token = jwt.decode(
                 token,

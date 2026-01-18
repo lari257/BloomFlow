@@ -261,21 +261,27 @@ def process_payment_success(order_id, token):
         logger.error(f"Error processing payment success for order {order_id}: {e}", exc_info=True)
         return False, str(e)
 
+
 @bp.route('/orders', methods=['POST'])
 @require_auth
 def create_order():
-    """Create new order (customer)"""
+    """Create new order (only admin and client roles allowed)"""
+    user_info = request.current_user
+    roles = get_roles_from_token(user_info)
+    if not any(role in roles for role in ['admin', 'client']):
+        return jsonify({'error': 'Insufficient permissions: only admin and client can create orders'}), 403
+
     data = request.get_json()
     token = request.token
-    
+
     if 'items' not in data or not data['items']:
         return jsonify({'error': 'Order must contain at least one item'}), 400
-    
+
     # Get user ID
     user_id = get_user_id_from_token(token)
     if not user_id:
         return jsonify({'error': 'Could not determine user ID'}), 400
-    
+
     # Validate items
     items = data['items']
     for item in items:
@@ -283,32 +289,32 @@ def create_order():
             return jsonify({'error': 'Each item must have flower_type_id and quantity'}), 400
         if item['quantity'] <= 0:
             return jsonify({'error': 'Quantity must be positive'}), 400
-    
+
     # Check inventory availability
     if not check_inventory_availability(items, token):
         return jsonify({'error': 'Some items are not available in sufficient quantity'}), 400
-    
+
     # Get prices
     prices = get_flower_prices(items, token)
-    
+
     # Calculate total
     total_price = Decimal('0.0')
     order_items = []
-    
+
     for item in items:
         flower_type_id = item['flower_type_id']
         quantity = item['quantity']
         unit_price = Decimal(str(prices.get(flower_type_id, 0)))
         subtotal = unit_price * quantity
         total_price += subtotal
-        
+
         order_items.append({
             'flower_type_id': flower_type_id,
             'quantity': quantity,
             'unit_price': unit_price,
             'subtotal': subtotal
         })
-    
+
     # Create order with pending_payment status (payment required before processing)
     order = Order(
         user_id=user_id,
@@ -317,10 +323,10 @@ def create_order():
         total_price=total_price,
         notes=data.get('notes')
     )
-    
+
     db.session.add(order)
     db.session.flush()  # Get order ID
-    
+
     # Create order items
     for item_data in order_items:
         order_item = OrderItem(
@@ -328,10 +334,10 @@ def create_order():
             **item_data
         )
         db.session.add(order_item)
-    
+
     # Commit the order (don't reduce inventory yet - wait for payment confirmation)
     db.session.commit()
-    
+
     return jsonify({
         'message': 'Order created, payment required',
         'order': order.to_dict()
@@ -381,26 +387,48 @@ def get_order(order_id):
         'order': order.to_dict()
     }), 200
 
+
 @bp.route('/orders/<int:order_id>/status', methods=['PUT'])
-@require_role('admin')
+@require_auth
 def update_order_status(order_id):
-    """Update order status (admin only)"""
+    """Update order status (admin, florar, client can cancel if not paid)"""
     order = Order.query.get(order_id)
     if not order:
         return jsonify({'error': 'Order not found'}), 404
     data = request.get_json()
-    
+
     if 'status' not in data:
         return jsonify({'error': 'Missing status field'}), 400
-    
+
     valid_statuses = ['pending_payment', 'pending', 'confirmed', 'processing', 'completed', 'cancelled']
     if data['status'] not in valid_statuses:
         return jsonify({'error': f'Invalid status. Must be one of: {", ".join(valid_statuses)}'}), 400
-    
+
+    user_info = request.current_user
+    roles = get_roles_from_token(user_info)
+    token = request.token
+
+    # Only allow cancellation if payment_status is 'pending'
+    if data['status'] == 'cancelled':
+        if order.payment_status != 'processing':
+            return jsonify({'error': 'Cannot cancel: order already paid or in process'}), 403
+        # Admin/florar can cancel any unpaid order
+        if 'admin' in roles or 'florar' in roles:
+            pass
+        else:
+            # Client can only cancel their own unpaid order
+            user_id = get_user_id_from_token(token)
+            if not user_id or order.user_id != user_id:
+                return jsonify({'error': 'Access denied'}), 403
+    else:
+        # Only admin can update to other statuses
+        if 'admin' not in roles:
+            return jsonify({'error': 'Only admin can update status except cancellation'}), 403
+
     old_status = order.status
     order.status = data['status']
     db.session.commit()
-    
+
     # Publish order_completed notification when order is marked as completed
     if data['status'] == 'completed' and old_status != 'completed':
         try:
@@ -409,7 +437,7 @@ def update_order_status(order_id):
             logger.info(f"Published order_completed notification for order {order.id}")
         except Exception as e:
             logger.error(f"Error publishing order_completed notification for order {order.id}: {e}")
-    
+
     return jsonify({
         'message': 'Order status updated',
         'order': order.to_dict()
@@ -461,7 +489,6 @@ def create_payment_intent(order_id):
         return jsonify({'error': f'Order is not in pending_payment status. Current status: {order.status}'}), 400
     
     # Check if payment intent already exists - return it without full user validation
-    # This handles race conditions from duplicate requests
     if order.stripe_payment_intent_id:
         try:
             payment_intent = stripe.PaymentIntent.retrieve(order.stripe_payment_intent_id)
@@ -661,8 +688,6 @@ def stripe_webhook():
     
     if not config.STRIPE_WEBHOOK_SECRET:
         logger.warning("STRIPE_WEBHOOK_SECRET not configured, skipping webhook verification")
-        # In development, you might want to skip verification
-        # In production, always verify webhooks
         event = None
         try:
             import json
@@ -712,7 +737,6 @@ def stripe_webhook():
             order_id = order.id
         
         # Get token from request if available, otherwise use a placeholder
-        # In production, you might want to store a service token
         token = request.headers.get('Authorization', '')
         success, error_msg = process_payment_success(order_id, token)
         if success:

@@ -72,7 +72,7 @@ function AppRoutes() {
         <Route
           path="/orders/new"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredRoles={['admin', 'client']}>
               <OrderForm />
             </ProtectedRoute>
           }
@@ -99,7 +99,7 @@ function AppRoutes() {
         <Route
           path="/bouquet"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredRoles={['admin', 'client']}>
               <BouquetBuilder />
             </ProtectedRoute>
           }

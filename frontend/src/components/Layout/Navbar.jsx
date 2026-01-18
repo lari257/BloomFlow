@@ -46,11 +46,13 @@ const Navbar = () => {
             </Link>
           </li>
           
+{!hasAnyRole(roles, ['florar']) && (
           <li>
             <Link to="/bouquet" className={`nav-link ${isActive('/bouquet')}`}>
               Bouquet Builder
             </Link>
           </li>
+          )}
           
           {hasAnyRole(roles, ['admin', 'florar']) && (
             <li>

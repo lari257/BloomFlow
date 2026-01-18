@@ -284,6 +284,7 @@ const OrderList = () => {
                 style={styles.searchInput}
               />
             </div>
+{!hasRole(roles, 'florar') && (
             <button
               onClick={() => navigate('/orders/new')}
               style={{...styles.btn, ...styles.btnPrimary}}
@@ -291,6 +292,7 @@ const OrderList = () => {
             >
               + New Order
             </button>
+            )}
           </div>
         </div>
 

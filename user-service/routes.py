@@ -8,10 +8,7 @@ config = Config()
 
 bp = Blueprint('users', __name__)
 
-
-# ============================================================
 # KEYCLOAK ADMIN API HELPERS
-# ============================================================
 
 def get_keycloak_admin_token():
     """Get admin access token from Keycloak master realm"""
@@ -334,9 +331,7 @@ def sync_user_roles(user, keycloak_roles):
             user.roles.append(role)
 
 
-# ============================================================
 # ENDPOINTS
-# ============================================================
 
 @bp.route('/users', methods=['GET'])
 @require_admin
@@ -517,9 +512,7 @@ def debug_token():
     }), 200
 
 
-# ============================================================
 # REGISTRATION WITH ROLE REQUEST
-# ============================================================
 
 @bp.route('/users/signup', methods=['POST'])
 def signup():
@@ -729,10 +722,7 @@ def reject_florar(user_id):
         'user': user.to_dict()
     }), 200
 
-
-# ============================================================
 # INTERNAL SERVICE-TO-SERVICE ENDPOINTS (no auth required)
-# ============================================================
 
 @bp.route('/internal/users/<int:user_id>', methods=['GET'])
 def get_user_internal(user_id):

@@ -5,6 +5,7 @@ import { getOrder, updateOrderStatus } from '../../services/orders'
 import { getFlowers } from '../../services/inventory'
 import { getUsers } from '../../services/users'
 import { formatDate, formatCurrency, getStatusColor, hasRole, hasAnyRole } from '../../utils/helpers'
+import { getUserInfo as getCurrentUserInfo } from '../../services/auth'
 import '../../styles/components.css'
 
 const OrderDetail = () => {
@@ -122,12 +123,24 @@ const OrderDetail = () => {
 
   const statusOptions = ['pending_payment', 'pending', 'confirmed', 'processing', 'completed', 'cancelled']
   const isAdmin = hasRole(roles, 'admin')
-  const canEdit = hasAnyRole(roles, ['admin', 'florar'])
+  const isFlorar = hasRole(roles, 'florar')
+  const isClient = hasRole(roles, 'client')
+  const canEdit = isAdmin || isFlorar
   const user = getUserInfo(order.user_id)
   const displayStatus = mapStatus(order.status)
   const statusInfo = statusConfig[displayStatus] || statusConfig[order.status] || statusConfig.pending
   const paymentStatusInfo = paymentStatusConfig[order.payment_status] || paymentStatusConfig.pending
   const needsPayment = order.status === 'pending_payment' || (order.payment_status && order.payment_status !== 'succeeded')
+
+  // Determine if the current user can cancel this order
+  const currentUser = getCurrentUserInfo()
+  const currentUserId = currentUser && currentUser.id ? String(currentUser.id) : null
+  const canCancel = (
+    // Admin or florar can cancel any unpaid order
+    (canEdit && order.payment_status === 'pending' && order.status !== 'cancelled') ||
+    // Client can cancel their own unpaid order
+    (isClient && order.payment_status === 'pending' && order.status !== 'cancelled' && order.user_id && currentUserId && String(order.user_id) === currentUserId)
+  )
 
   return (
     <div style={styles.container}>
@@ -284,30 +297,32 @@ const OrderDetail = () => {
         )}
 
         {/* Status Actions */}
-        {canEdit && (
+        {(canEdit || canCancel) && (
           <div style={styles.section}>
             <h3 style={styles.sectionTitle}>Update Status</h3>
-            <div style={styles.statusButtons}>
-              {statusOptions.map(status => (
-                <button
-                  key={status}
-                  onClick={() => handleStatusUpdate(status)}
-                  disabled={updating || order.status === status}
-                  style={{
-                    ...styles.statusBtn,
-                    ...(order.status === status ? {
-                      background: statusConfig[mapStatus(status)].color,
-                      color: 'white',
-                      borderColor: statusConfig[mapStatus(status)].color,
-                    } : {})
-                  }}
-                  className="btn"
-                >
-                  {statusConfig[mapStatus(status)].label}
-                </button>
-              ))}
-            </div>
-            {order.status !== 'cancelled' && (
+            {canEdit && (
+              <div style={styles.statusButtons}>
+                {statusOptions.map(status => (
+                  <button
+                    key={status}
+                    onClick={() => handleStatusUpdate(status)}
+                    disabled={updating || order.status === status}
+                    style={{
+                      ...styles.statusBtn,
+                      ...(order.status === status ? {
+                        background: statusConfig[mapStatus(status)].color,
+                        color: 'white',
+                        borderColor: statusConfig[mapStatus(status)].color,
+                      } : {})
+                    }}
+                    className="btn"
+                  >
+                    {statusConfig[mapStatus(status)].label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {canCancel && (
               <button
                 onClick={() => handleStatusUpdate('cancelled')}
                 disabled={updating}

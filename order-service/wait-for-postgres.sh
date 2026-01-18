@@ -9,7 +9,7 @@ POSTGRES_USER=${POSTGRES_USER:-bloomflow}
 
 until pg_isready -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" > /dev/null 2>&1; do
   echo "PostgreSQL is unavailable - sleeping"
-  sleep 2
+  sleep 5
 done
 
 echo "PostgreSQL is up - executing command"
